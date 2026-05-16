@@ -16912,7 +16912,11 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
                 )
             except Exception as _e:
                 logger.debug("spawn_async_diagnostic failed: %s", _e)
-        asyncio.create_task(runner.stop())
+        # 2026-05-16 permfix: treat SIGTERM-from-systemd as a restart
+        # request (systemd Restart=always means we WILL come back).
+        # Sets _restart_requested=True so busy_input_mode=queue activates
+        # and user messages buffer instead of getting 'not accepting' bounce.
+        runner.request_restart(detached=False, via_service=True)
 
     def restart_signal_handler():
         runner.request_restart(detached=False, via_service=True)
