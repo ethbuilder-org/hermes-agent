@@ -3168,7 +3168,7 @@ def register_mcp_servers(servers: Dict[str, dict]) -> List[str]:
         summary = f"MCP: registered {new_tool_count} tool(s) from {len(connected)} server(s)"
         if failed:
             summary += f" ({failed} failed)"
-        logger.info(summary)
+        logger.debug(summary)
 
     return _existing_tool_names()
 

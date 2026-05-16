@@ -1651,7 +1651,16 @@ class TelegramAdapter(BasePlatformAdapter):
                         retry_after = getattr(send_err, "retry_after", None)
                         if retry_after is not None or "retry after" in str(send_err).lower():
                             if _send_attempt < 2:
-                                wait = float(retry_after) if retry_after is not None else 1.0
+                                # 2026-05-13 ethbuilder: timedelta-aware + 10s cap
+                                from datetime import timedelta as _timedelta
+                                if isinstance(retry_after, _timedelta):
+                                    wait = retry_after.total_seconds()
+                                else:
+                                    wait = float(retry_after) if retry_after is not None else 1.0
+                                # Cap flood wait at 10s — long enough to clear the
+                                # rate-limit window, short enough not to block shutdown.
+                                wait = min(wait, 10.0)
+                                raw_wait = wait
                                 logger.warning(
                                     "[%s] Telegram flood control on send (attempt %d/3), retrying in %.1fs: %s",
                                     self.name,
@@ -1764,13 +1773,24 @@ class TelegramAdapter(BasePlatformAdapter):
             # to a normal final send instead of leaving a truncated partial.
             retry_after = getattr(e, "retry_after", None)
             if retry_after is not None or "retry after" in err_str:
-                wait = retry_after if retry_after else 1.0
+                # 2026-05-13 ethbuilder: timedelta-aware + 20s abort
+                from datetime import timedelta as _timedelta
+                if isinstance(retry_after, _timedelta):
+                    wait = retry_after.total_seconds()
+                else:
+                    wait = float(retry_after) if retry_after else 1.0
+                # Cap at 5s in edit path — longer waits abort and fall through
+                # to a normal send instead of leaving a truncated partial edit.
+                if wait > 20.0:
+                    logger.warning(
+                        "[%s] Telegram flood control too long (%.1fs), aborting edit",
+                        self.name, wait,
+                    )
+                    return SendResult(success=False, error=f"flood_control:{wait}")
                 logger.warning(
                     "[%s] Telegram flood control, waiting %.1fs",
                     self.name, wait,
                 )
-                if wait > 5.0:
-                    return SendResult(success=False, error=f"flood_control:{wait}")
                 await asyncio.sleep(wait)
                 try:
                     await self._bot.edit_message_text(

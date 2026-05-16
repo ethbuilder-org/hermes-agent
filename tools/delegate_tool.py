@@ -713,7 +713,7 @@ def _build_child_progress_callback(
     goal_label = (goal or "").strip()
 
     # Gateway: batch tool names, flush periodically
-    _BATCH_SIZE = 5
+    _BATCH_SIZE = 2  # 2026-05-13 ethbuilder: tighter flush so users see subagent progress sooner
     _batch: List[str] = []
     _tool_count = [0]  # per-subagent running counter (list for closure mutation)
 

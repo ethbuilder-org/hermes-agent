@@ -91,7 +91,7 @@ class GatewayStreamConsumer:
 
     # After this many consecutive flood-control failures, permanently disable
     # progressive edits for the remainder of the stream.
-    _MAX_FLOOD_STRIKES = 3
+    _MAX_FLOOD_STRIKES = 2
 
     # Reasoning/thinking tags that models emit inline in content.
     # Must stay in sync with cli.py _OPEN_TAGS/_CLOSE_TAGS and
