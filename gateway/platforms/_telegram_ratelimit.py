@@ -122,7 +122,12 @@ class TelegramRateLimiter:
         async with self._lock:
             now = time.monotonic()
             # 2x backoff; minimum 30s lockout
-            until = now + max(retry_after_sec * 2.0, 30.0)
+            # 2026-05-19 ethbuilder fix: tighten backoff from 2x to retry_after+60s.
+            # Telegram's retry_after IS wall-clock until accept (empirically
+            # verified — three sequential 429s gave values that all targeted the
+            # same end-time, confirming honest decrement). 2x wastes 1x of
+            # lockout window. 60s safety buffer is enough cushion.
+            until = now + max(retry_after_sec + 60.0, 30.0)
             cur = self._chat_locks.get(chat_key, 0)
             if until > cur:
                 self._chat_locks[chat_key] = until
