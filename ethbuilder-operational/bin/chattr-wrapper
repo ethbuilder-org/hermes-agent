@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+PROTECTED=("/etc/systemd/system/hermes-gateway.service" "/root/.hermes/config.yaml")
+removing=false
+for a in "$@"; do case "$a" in -i|-*-i*|*\-i*) removing=true;; esac; done
+if [ "$removing" = true ] && [ "${HERMES_PERMFIX_OVERRIDE:-}" != "yes" ]; then
+    for a in "$@"; do for p in "${PROTECTED[@]}"; do
+        if [ "$a" = "$p" ]; then
+            echo "chattr-wrapper: REFUSING to remove immutable on $p" >&2
+            echo "chattr-wrapper: ask Mehdi; bypass with HERMES_PERMFIX_OVERRIDE=yes" >&2
+            exit 1
+        fi
+    done; done
+fi
+exec /usr/bin/chattr "$@"

@@ -1,0 +1,5 @@
+[Unit]
+Description=Permfix drift sentinel
+[Service]
+Type=oneshot
+ExecStart=/root/.hermes/scripts/permfix-sentinel.sh

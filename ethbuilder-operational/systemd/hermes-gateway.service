@@ -1,0 +1,45 @@
+[Unit]
+Description=Hermes Agent Gateway
+After=network-online.target
+Wants=network-online.target
+# 10 restarts allowed in 10 min — generous for transient API hiccups
+StartLimitIntervalSec=600
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/root/.hermes
+EnvironmentFile=/root/.hermes/.env
+ExecStart=/root/.hermes/hermes-agent/venv/bin/hermes gateway run
+Restart=always
+RestartSec=3
+# Graceful drain — 150s matches restart_drain_timeout=120 + 30 buffer
+TimeoutStopSec=30
+KillMode=mixed
+# SIGTERM the python parent; let it cascade to children. Hermes catches SIGTERM
+# and exits cleanly via gateway.run.stop().
+KillSignal=SIGTERM
+# Exit 75 = clean SIGTERM drain, not a failure
+SuccessExitStatus=75
+# Exit 75 = clean SIGTERM drain, not a failure
+SuccessExitStatus=75
+
+StandardOutput=append:/root/.hermes/logs/gateway.log
+StandardError=append:/root/.hermes/logs/gateway.log
+
+# Resource limits — 6 GB hard / 4.5 GB soft (we have 31 GB total, can afford it)
+MemoryMax=6G
+MemoryHigh=5500M
+CPUQuota=600%
+OOMScoreAdjust=-500
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=no
+PrivateTmp=no
+
+[Install]
+WantedBy=multi-user.target

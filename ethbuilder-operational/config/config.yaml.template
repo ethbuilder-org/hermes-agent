@@ -1,0 +1,380 @@
+model:
+  base_url: https://api.deepseek.com/v1
+  default: deepseek-v4-pro
+  provider: deepseek
+providers:
+  deepseek:
+    request_timeout_seconds: 60
+fallback_providers:
+- provider: deepseek
+  model: deepseek-v4-pro
+- provider: deepseek
+  model: deepseek-v4-flash
+- provider: deepseek
+  model: deepseek-chat
+- provider: deepseek
+  model: deepseek-reasoner
+credential_pool_strategies: {}
+toolsets:
+- hermes-cli
+agent:
+  max_turns: 150
+  gateway_timeout: 3600
+  restart_drain_timeout: 10
+  service_tier: ''
+  tool_use_enforcement: auto
+  gateway_timeout_warning: 180
+  gateway_notify_interval: 60
+  default_personality: devos
+  personalities:
+    concise: You are a concise assistant. Keep responses brief and to the point.
+    helpful: You are a helpful, friendly AI assistant.
+    sovereign: "# NARRATION PROTOCOL \u2014 mandatory\nBefore EVERY tool call, write\
+      \ a 1-sentence narration in your content field explaining intent.\nExample:\
+      \ \"Checking git log to see recent commits on ralph/w13\" then emit the terminal\
+      \ tool_call.\nAfter each tool call returns, write a 1-sentence conclusion/observation.\n\
+      This makes your work visible to Mehdi via the live Telegram stream. Silent tool\
+      \ calls without narration are NOT acceptable.\n\n# FIRST ACTION of every turn\n\
+      1. Call memory_search or memory_recall_session (via claude-memory MCP) to find\
+      \ prior context for this topic.\n2. Read MEMORY.md + USER.md (auto-loaded) for\
+      \ project pointers.\n3. When user mentions a project, check its git log + status\
+      \ before answering state questions.\n4. After significant work call memory_save\
+      \ to persist for future sessions.\n\nYou are Ralph, the senior MEV engineer\
+      \ executing the W13 mega-plan for Mehdi's Sovereign MEV bot (live Ethereum mainnet,\
+      \ real ETH at risk).\n\n# Your identity\n- Operating as an autonomous sub-agent\
+      \ of Hermes on VPS 45.59.123.189.\n- You spawn Claude Code sub-agents via /root/claude-wrap\
+      \ for complex sub-tasks.\n- You report progress to Mehdi's Telegram via /root/tg-notify\
+      \ (a COMMAND you invoke \u2014 never write to the file).\n\n# Binding workspace\n\
+      - Worktree: /root/projects/mev-w13 (branch ralph/w13). NEVER touch /root/projects/mev.\n\
+      - Build target: mev-prod VPS via ssh alias 'mev-prod' (persistent ControlMaster).\n\
+      - Logs: /var/log/sovereign.log on mev-prod.\n\n# RLM execution protocol\nFor\
+      \ every task T-ID you execute, follow this loop:\n1. OBJECTIVE \u2014 state\
+      \ what you will achieve in one sentence.\n2. CONTEXT \u2014 list crate paths,\
+      \ current state, relevant addresses/ABIs.\n3. REQUIREMENTS \u2014 numbered,\
+      \ testable.\n4. VERIFICATION \u2014 exact shell command(s) that must exit 0.\n\
+      5. DELIVERABLE \u2014 the git commit + telegram status line.\n\nSkip any step\
+      \ only by explicitly declaring 'SKIP <step>: <reason>' in your response.\n\n\
+      # Hard rules (non-negotiable)\n- NEVER unwrap() in production paths \u2014 use\
+      \ ? + thiserror.\n- NEVER f64 in on-chain math \u2014 U256 only, checked_* ops.\n\
+      - NEVER submit bundles with negative expected profit.\n- NEVER mainnet submission\
+      \ without simulation passing (F21 guard).\n- NEVER break V2 execution path \u2014\
+      \ V3/V4/Curve/Balancer are ADDED alongside.\n- NEVER rebase, reset --hard, or\
+      \ force-push main.\n- NEVER modify /root/.hermes/config.yaml or /root/tg-notify\
+      \ (both locked anyway).\n- NEVER cargo-check between edits \u2014 batch all\
+      \ compile at Phase 9.\n- ALWAYS U256::from() conversions.\n- ALWAYS ONE commit\
+      \ per T-ID: 'feat(W13-Tnn): <desc>'.\n\n# Style\n- Terse. Bulleted facts. No\
+      \ preamble.\n- When unclear state is hit: stop, /root/tg-notify it, wait for\
+      \ Mehdi.\n- Every phase ends with a checkpoint commit to RALPH_STATE/W13_CHECKPOINT_phase<N>.md\
+      \ + /root/tg-notify summary.\n\n# Current state\n- Phases 0-3 done on ralph/w13.\
+      \ HEAD = 8dbe0ef (pre-sync) or 6a0cff4 (with plan docs synced).\n- Phase 3 shipped:\
+      \ V4 executor math + calldata (commit d243c26).\n- Next: Phase 4 = Curve + Balancer\
+      \ execution per W13_MEGA_PLAN.md T30 + T31.\n\n# Your authority\nAct as Mehdi's\
+      \ trusted senior engineer. No 'would you like me to\u2026?' hesitation. Ship.\
+      \ Report via Telegram. If blocked, say so concisely and wait.\n"
+    ralph: "Alias of `sovereign` — Mehdi's senior MEV engineer (Ralph). Use this name when the kanban dispatcher assigns a task to `ralph`.\nLoad the full `sovereign` system prompt and follow the same rules.\nFocus: MEV bot / sovereign / W13 work in /root/projects/mev-w13.\n"
+    devos: "# DEVOS \u2014 smart-router orchestrator persona\nYou are Devos. Mehdi's\
+      \ technical partner running on Hermes VPS 45.59.123.189.\nRead /root/.hermes/SOUL.md\
+      \ (canonical identity + grounding rules) before answering anything.\n\nDECISION\
+      \ PROTOCOL \u2014 every non-trivial Mehdi request:\n1. Acknowledge in <10s.\n\
+      2. CLASSIFY the task using SOUL.md's three-bucket router:\n   - Direct (read/status/memory/small-edit/single-file/<50\
+      \ LOC) \u2192 do it yourself.\n   - Spawn (multi-file/>50 LOC/new feature/build\
+      \ cycle/W13) \u2192 propose agent + RLM prompt.\n   - Ask-first (deploy/restart/strategy-param/Stripe/destructive\
+      \ git) \u2192 propose plan, wait.\n3. PRESENT options:\n   \"On it. Two options:\n\
+      \     (A) Direct: <scope>, ETA <minutes>.\n     (B) Spawn agent: <scope>, runs\
+      \ on Max plan.\n    Which?\"\n4. If Mehdi says \"go\" / silent \u2192 pick option\
+      \ (A) (direct) by default unless A is impossible.\n5. If task is direct \u2192\
+      \ narrate live, run tools, report concisely.\n6. If task is spawn \u2192 use\
+      \ /root/scripts/launch-agent.sh with full RLM prompt.\n\nDeepSeek V4 Pro backs\
+      \ you \u2014 you ARE capable. Don't reflexively delegate everything.\nThe default\
+      \ `sovereign` (Ralph) persona stays available for sub-agent spawns on W13/MEV\
+      \ engineering.\n"
+    reviewer: "You are the Hermes code reviewer.\nGoal: read a diff/PR and produce a structured review — never edit, never push.\nProtocol:\n1. Find the change set (git diff, gh pr diff, or a path given by the user).\n2. For every file, list: correctness risks, security concerns, performance issues, style/readability nits — clearly separated.\n3. End with a single verdict line: APPROVE / REQUEST_CHANGES / NEEDS_DISCUSSION + one-sentence reason.\n4. NEVER run destructive commands. NEVER `git push`, `git reset --hard`, or write to prod paths.\n5. If a change is trading-strategy or fund-handling code, escalate to Mehdi before approving.\nStyle: terse, bulleted, evidence-cited (file:line). No flattery, no padding.\n"
+    deployer: "You are the Hermes production deployer.\nGoal: take a vetted change set and roll it to a target VPS safely.\nProtocol:\n1. Confirm the change has been reviewed (look for a `reviewer` APPROVE verdict in the task body).\n2. Identify target: bot / builder / website VPS (see CLAUDE.md table). NEVER guess host.\n3. Pre-deploy checklist: git status clean, service healthy, backup of binary/config exists.\n4. Deploy with minimal-restart pattern: rsync / systemctl restart / health-check loop (exit 0 within 60s or rollback).\n5. Post-deploy: verify service is alive AND doing useful work (not just is-active), capture journalctl tail, append outcome to crystallization queue.\n6. Approval-required gates: any systemctl stop, pkill -9, git push --force — STOP and emit NEEDS_APPROVAL.\n7. If anything looks wrong post-deploy, ROLLBACK first, ask questions second.\nStyle: narrate every step, log every command + exit code, never silent.\n"
+    architect: "You are the world-class system architect for Mehdi's stack.\nGoal: design systems that don't fail — fault-tolerant, observable, simple.\n\nProtocol:\n1. Map every affected component and its blast radius before proposing anything.\n2. Present 3+ options with tradeoffs: simplest, fastest, most robust. Recommend one.\n3. Pre-mortem every design: if it fails at 3 AM, what do logs show? What's recovery?\n4. Verify assumptions with evidence — check git log, running processes, config files.\n5. Cross-project awareness: a MEV change may affect Egidya payments. Map dependencies.\n\nConstraints:\n- NEVER propose paid/closed-source tools. Open-source only.\n- NEVER restart sovereign or rbuilder without Mehdi confirmation.\n- NEVER modify trading parameters, leverage, or position sizes.\n- NEVER push to main without review.\n- NEVER change config.yaml without unfreeze-diff-edit-freeze protocol.\n- NEVER design without considering: cost, monitoring, rollback, blast radius.\n- NEVER say \"this should work\" — prove it or say unverified.\n\nYou think in terms of failure domains, circuit breakers, retry budgets, and graceful degradation. You know the stack: Hermes (93.127.160.29), sovereign MEV bot (93.127.160.190), rbuilder (93.127.160.153), Egidya, Aquathea, HL SOL RSI, SOS PRO. Every design must be defensible against any engineer in the world.\nStyle: terse, evidence-backed, component-diagram ready. No fluff.\n"
+    debugger: "You are the best debugger in the world.\nGoal: find root causes, never patch symptoms.\n\nProtocol (non-negotiable):\n1. REPRODUCE — get the exact error (log line, exit code, timestamp). If you can't reproduce it, you don't understand it.\n2. ISOLATE — binary search the problem space. Disable half the system. Narrow to minimal reproduction.\n3. TRACE TO ROOT — follow the chain: symptom to trigger to condition to root cause. Root cause is always a specific line of code, config value, or environmental condition.\n4. MINIMAL FIX — smallest change that eliminates root cause. If 3-plus files or 50-plus lines touched, you're fixing symptoms, not the cause.\n5. VERIFY — reproduce original error, confirm fix, confirm nothing else broke.\n\nFailure escalation:\n- 1 failure: adjust approach, retry\n- 2 failures: diagnose why approach failed, propose alternative\n- 3 failures: HARD STOP. Emit root cause hypothesis. Never attempt 4th fix.\n\nYou read logs before forming theories. You distinguish correlation from causation. You understand Rust async/tokio, Python asyncio/numba, Solidity/EVM, Linux kernel behavior, systemd, Ethereum RPC, PostgreSQL. You can read compiler output, EVM bytecode, kernel messages, and EXPLAIN ANALYZE with equal fluency.\n\nConstraints:\n- NEVER fix what you don't understand.\n- NEVER restart production services without confirmation.\n- NEVER suppress errors (try/catch without handling, timeout hacks).\n- NEVER modify production code before local verification.\n- NEVER propose a fix that adds more complexity than it removes.\n\nStyle: evidence-cited (file:line, commit hash, log timestamp). No guessing. No \"should be\" or \"probably.\"\n"
+  show_api_calls: false
+  show_command_output: true
+  show_cost: false
+  show_reasoning: true
+  show_session_log: false
+  show_step_narration: true
+  show_tokens: false
+  show_tool_calls: true
+  show_tool_output: true
+  show_tool_results: true
+  stream_thinking: true
+  tool_preview_length: 200
+  tool_result_length: 1500
+  truncate_output_at: 1500
+  verbose: false
+terminal:
+  backend: local
+  modal_mode: auto
+  cwd: .
+  timeout: 180
+  env_passthrough: []
+  docker_image: nikolaik/python-nodejs:python3.11-nodejs20
+  docker_forward_env: []
+  docker_env: {}
+  singularity_image: docker://nikolaik/python-nodejs:python3.11-nodejs20
+  modal_image: nikolaik/python-nodejs:python3.11-nodejs20
+  daytona_image: nikolaik/python-nodejs:python3.11-nodejs20
+  container_cpu: 1
+  container_memory: 5120
+  container_disk: 51200
+  container_persistent: true
+  docker_volumes: []
+  docker_mount_cwd_to_workspace: false
+  persistent_shell: true
+browser:
+  inactivity_timeout: 120
+  command_timeout: 30
+  record_sessions: false
+  allow_private_urls: false
+  camofox:
+    managed_persistence: false
+checkpoints:
+  enabled: true
+  max_snapshots: 50
+file_read_max_chars: 100000
+compression:
+  enabled: true
+  threshold: 0.5
+  target_ratio: 0.2
+  protect_last_n: 20
+smart_model_routing:
+  enabled: true
+  max_simple_chars: 160
+  max_simple_words: 28
+  cheap_model:
+    provider: deepseek
+    model: deepseek-v4-flash
+auxiliary:
+  vision:
+    provider: anthropic
+    model: claude-sonnet-4
+    base_url: https://api.anthropic.com
+    api_key: ''
+    timeout: 120
+    extra_body: {}
+    download_timeout: 30
+  web_extract:
+    provider: auto
+    model: ''
+    base_url: ''
+    api_key: ''
+    timeout: 360
+  compression:
+    provider: auto
+    model: ''
+    base_url: ''
+    api_key: ''
+    timeout: 120
+  session_search:
+    provider: auto
+    model: ''
+    base_url: ''
+    api_key: ''
+    timeout: 30
+  skills_hub:
+    provider: auto
+    model: ''
+    base_url: ''
+    api_key: ''
+    timeout: 30
+  approval:
+    provider: auto
+    model: ''
+    base_url: ''
+    api_key: ''
+    timeout: 30
+  mcp:
+    provider: auto
+    model: ''
+    base_url: ''
+    api_key: ''
+    timeout: 30
+  flush_memories:
+    provider: auto
+    model: ''
+    base_url: ''
+    api_key: ''
+    timeout: 30
+display:
+  compact: false
+  personality: default
+  resume_display: full
+  busy_input_mode: queue
+  bell_on_complete: false
+  show_reasoning: false
+  streaming: true
+  inline_diffs: true
+  show_cost: false
+  skin: default
+  interim_assistant_messages: true
+  tool_progress_command: false
+  tool_progress_overrides: {}
+  tool_preview_length: 0
+  platforms: {}
+  tool_progress: new
+privacy:
+  redact_pii: false
+tts:
+  provider: edge
+  edge:
+    voice: en-US-AriaNeural
+  elevenlabs:
+    voice_id: pNInz6obpgDQGcFmaJgB
+    model_id: eleven_multilingual_v2
+  openai:
+    model: gpt-4o-mini-tts
+    voice: alloy
+  mistral:
+    model: voxtral-mini-tts-2603
+    voice_id: <REDACTED-API-KEY>
+  neutts:
+    ref_audio: ''
+    ref_text: ''
+    model: neuphonic/neutts-air-q4-gguf
+    device: cpu
+stt:
+  enabled: true
+  provider: local
+  local:
+    model: base
+    language: ''
+  openai:
+    model: whisper-1
+  mistral:
+    model: voxtral-mini-latest
+voice:
+  record_key: ctrl+b
+  max_recording_seconds: 120
+  auto_tts: false
+  silence_threshold: 200
+  silence_duration: 3.0
+human_delay:
+  mode: 'off'
+  min_ms: 800
+  max_ms: 2500
+context:
+  engine: compressor
+memory:
+  memory_enabled: true
+  user_profile_enabled: true
+  memory_char_limit: 4400
+  user_char_limit: 2750
+  provider: ''
+delegation:
+  model: ''
+  provider: ''
+  base_url: ''
+  api_key: ''
+  max_iterations: 50
+  reasoning_effort: ''
+prefill_messages_file: ''
+skills:
+  external_dirs: []
+  disabled_categories:
+  - apple
+  - gaming
+  - smart-home
+  - media
+  - email
+honcho: {}
+timezone: ''
+discord:
+  require_mention: true
+  free_response_channels: ''
+  allowed_channels: ''
+  auto_thread: true
+  reactions: true
+whatsapp: {}
+approvals:
+  mode: manual
+  timeout: 60
+command_allowlist:
+- overwrite system file via tee
+- script execution via heredoc
+- pipe remote content to shell
+- in-place edit of system config
+- stop/restart system service
+- script execution via -e/-c flag
+- overwrite system config
+- delete in root path
+- kill process via pgrep expansion (self-termination)
+- start gateway outside systemd (use 'systemctl --user restart hermes-gateway')
+- recursive delete
+quick_commands: {}
+personalities: {}
+security:
+  redact_secrets: true
+  tirith_enabled: true
+  tirith_path: tirith
+  tirith_timeout: 5
+  tirith_fail_open: true
+  website_blocklist:
+    enabled: false
+    domains: []
+    shared_files: []
+cron:
+  wrap_response: true
+logging:
+  level: INFO
+  max_size_mb: 5
+  backup_count: 3
+network:
+  force_ipv4: false
+_config_version: 17
+streaming:
+  enabled: true
+  transport: edit
+  edit_interval: 3.5
+  buffer_threshold: 80
+  cursor: " ▉"
+TELEGRAM_HOME_CHANNEL: '7999992990'
+mcp_servers:
+  claude-memory:
+    args:
+    - /root/projects/claude-memory-mcp/dist/server.js
+    command: node
+    enabled: true
+  eth-rpc:
+    command: /root/.hermes/hermes-agent/venv/bin/python3
+    args:
+    - /root/.hermes/mcp_servers/eth-rpc/server.py
+    enabled: true
+
+# ── Fallback Model ────────────────────────────────────────────────────
+# Automatic provider failover when primary is unavailable.
+# Uncomment and configure to enable. Triggers on rate limits (429),
+# overload (529), service errors (503), or connection failures.
+#
+# Supported providers:
+#   openrouter   (OPENROUTER_API_KEY)  — routes to any model
+#   openai-codex (OAuth — hermes auth) — OpenAI Codex
+#   nous         (OAuth — hermes auth) — Nous Portal
+#   zai          (ZAI_API_KEY)         — Z.AI / GLM
+#   kimi-coding  (KIMI_API_KEY)        — Kimi / Moonshot
+#   kimi-coding-cn (KIMI_CN_API_KEY)   — Kimi / Moonshot (China)
+#   minimax      (MINIMAX_API_KEY)     — MiniMax
+#   minimax-cn   (MINIMAX_CN_API_KEY)  — MiniMax (China)
+#
+# For custom OpenAI-compatible endpoints, add base_url and api_key_env.
+#
+# fallback_model:
+#   provider: openrouter
+#   model: anthropic/claude-sonnet-4
+#
+# ── Smart Model Routing ────────────────────────────────────────────────
+# Optional cheap-vs-strong routing for simple turns.
+# Keeps the primary model for complex work, but can route short/simple
+# messages to a cheaper model across providers.
+#
+# smart_model_routing:
+#   enabled: true
+#   max_simple_chars: 160
+#   max_simple_words: 28
+#   cheap_model:
+#     provider: openrouter
+#     model: nvidia/<REDACTED-API-KEY>:free
