@@ -157,6 +157,28 @@ def get_limiter() -> TelegramRateLimiter:
     return _INSTANCE
 
 
+
+
+class _DroppedMessage:
+    """Stand-in Message returned when the rate limiter drops a send/edit.
+    Has the attributes downstream code reads on a real Message so the call
+    path doesn't crash. message_id=0 marks it as 'not actually sent'."""
+    __slots__ = ("chat_id", "_msg_id")
+    def __init__(self, chat_id, msg_id):
+        self.chat_id = chat_id
+        self._msg_id = msg_id or 0
+    @property
+    def message_id(self):
+        return self._msg_id
+    @property
+    def date(self):
+        import datetime
+        return datetime.datetime.now(datetime.timezone.utc)
+    def __repr__(self):
+        return f"<_DroppedMessage chat_id={self.chat_id} message_id={self._msg_id}>"
+    def __bool__(self):
+        return False  # so `if msg:` correctly treats it as not-sent
+
 def install_monkey_patch():
     """Layer 6 — hook Bot._do_post so EVERY outbound API call passes through
     the limiter. Idempotent; safe to call multiple times."""
@@ -191,11 +213,11 @@ def install_monkey_patch():
             msg_id = data.get("message_id") if data else None
             if chat_id is not None and msg_id is not None:
                 if not await limiter.acquire_edit(chat_id, msg_id):
-                    return True  # PTB treats falsy-True as success; silently drop
+                    return _DroppedMessage(chat_id, msg_id)
         else:
             if chat_id is not None:
                 if not await limiter.acquire_send(chat_id, text):
-                    return True
+                    return _DroppedMessage(chat_id, None)
 
         try:
             return await original_do_post(self, endpoint, data, *args, **kwargs)
