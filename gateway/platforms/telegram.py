@@ -18,6 +18,12 @@ from typing import Dict, List, Optional, Any
 
 logger = logging.getLogger(__name__)
 
+# ethbuilder permfix ratelimit (2026-05-19): L1-L6 outbound limiter.
+# Layer 6 monkey-patches Bot._do_post so EVERY API call goes through us.
+from gateway.platforms._telegram_ratelimit import install_monkey_patch
+install_monkey_patch()
+
+
 try:
     from telegram import Update, Bot, Message, InlineKeyboardButton, InlineKeyboardMarkup
     try:
