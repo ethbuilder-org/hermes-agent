@@ -3556,7 +3556,13 @@ class GatewayRunner:
             from gateway.shutdown_forensics import check_systemd_timing_alignment
             _alignment = check_systemd_timing_alignment(self._restart_drain_timeout)
             if _alignment is not None and _alignment.get("mismatch"):
-                logger.warning(
+                # 2026-05-19 ethbuilder permfix: demoted to debug. Our
+                # TimeoutStopSec=30 + drain_timeout=10 setup is INTENTIONAL
+                # (fast-fail restarts; see ethbuilder-operational/README.md).
+                # Upstream's warning assumes operator misconfiguration; ours
+                # is by design. The unit file is chattr +i, so the regenerate
+                # advice would fail anyway.
+                logger.debug(
                     "Stale systemd unit detected: %s has TimeoutStopSec=%.0fs but "
                     "drain_timeout=%.0fs (expected >=%.0fs). systemd may SIGKILL the "
                     "gateway mid-drain. Run `hermes gateway service install --replace` "
