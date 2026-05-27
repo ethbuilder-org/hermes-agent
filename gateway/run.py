@@ -8958,12 +8958,129 @@ class GatewayRunner:
 
         return "\n".join(lines)
 
+    def _save_emergency_handoff(self, session_key: str, reason: str = "interrupted") -> None:
+        """Save emergency handoff state before a session is killed by /new or /reset.
+        
+        Non-blocking: all exceptions are caught so /reset never fails.
+        Writes to last-session.md and MCP memory DB if available.
+        """
+        try:
+            # ── Get the running agent ──
+            agent = self._running_agents.get(session_key)
+            if agent is None or agent is _AGENT_PENDING_SENTINEL:
+                _cache_lock = getattr(self, "_agent_cache_lock", None)
+                if _cache_lock is not None:
+                    with _cache_lock:
+                        _cached = self._agent_cache.get(session_key)
+                        agent = _cached[0] if isinstance(_cached, tuple) else _cached
+                if agent is None or agent is _AGENT_PENDING_SENTINEL:
+                    return
+            
+            # ── Extract agent state ──
+            summary = {}
+            if hasattr(agent, "get_activity_summary"):
+                try:
+                    summary = agent.get_activity_summary()
+                except Exception:
+                    pass
+            
+            current_tool = summary.get("current_tool", "unknown")
+            api_calls = summary.get("api_call_count", 0)
+            
+            # Elapsed time
+            start_ts = self._running_agents_ts.get(session_key, 0)
+            elapsed = int(time.time() - start_ts) if start_ts else 0
+            
+            # ── Get session ID and last user message ──
+            session_id = ""
+            last_user_msg = ""
+            try:
+                old_entry = self.session_store._entries.get(session_key)
+                if old_entry:
+                    session_id = getattr(old_entry, "session_id", "")
+                    try:
+                        history = self.session_store.load_transcript(session_id)
+                        for msg in reversed(history or []):
+                            if isinstance(msg, dict) and msg.get("role") == "user":
+                                last_user_msg = str(msg.get("content", ""))
+                                break
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            
+            if not session_id:
+                session_id = getattr(agent, "session_id", "") or ""
+            
+            # ── Write handoff markdown ──
+            import datetime as _dt
+            iso_now = _dt.datetime.utcnow().isoformat()
+            truncated_msg = (last_user_msg or "(no user message available)")[:500]
+            
+            handoff_dir = Path("/root/.hermes/handoff")
+            try:
+                handoff_dir.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
+            
+            handoff_md = handoff_dir / "last-session.md"
+            lines = [
+                "## EMERGENCY HANDOFF — Session Interrupted",
+                f"- **Date/Time**: {iso_now}",
+                f"- **Session ID**: {session_id}",
+                f"- **Reason**: {reason}",
+                f"- **Last user message**: {truncated_msg}",
+                f"- **Agent state**: {current_tool} at iteration {api_calls} ({elapsed}s)",
+                "",
+            ]
+            try:
+                handoff_md.write_text("\n".join(lines))
+            except Exception:
+                pass
+            
+            # ── Save to MCP memory DB ──
+            try:
+                import datetime as _dt2
+                db_path = Path("/root/.claude-memory/memory.db")
+                if db_path.exists():
+                    content = (
+                        f"Session {session_id} interrupted ({reason}): "
+                        f"{truncated_msg[:200]} | Agent was running {current_tool} "
+                        f"at iteration {api_calls} ({elapsed}s)"
+                    )
+                    db = sqlite3.connect(str(db_path))
+                    try:
+                        db.execute(
+                            "INSERT INTO memories (type, content, tags, project, created_at) "
+                            "VALUES (?, ?, ?, ?, ?)",
+                            [
+                                "checkpoint",
+                                content,
+                                "interrupted,handoff,emergency",
+                                "hermes",
+                                _dt2.datetime.utcnow().isoformat(),
+                            ],
+                        )
+                        db.commit()
+                    finally:
+                        db.close()
+            except Exception:
+                pass
+                
+        except Exception:
+            pass  # Emergency handoff must NEVER block /reset
+
     async def _handle_reset_command(self, event: MessageEvent) -> Union[str, EphemeralReply]:
         """Handle /new or /reset command."""
         source = event.source
         
         # Get existing session key
         session_key = self._session_key_for_source(source)
+        # ── Emergency handoff before killing the session ──
+        try:
+            self._save_emergency_handoff(session_key, "interrupted_by_/new")
+        except Exception:
+            pass
         self._invalidate_session_run_generation(session_key, reason="session_reset")
 
         # Snapshot the old entry so on_session_finalize can report the
@@ -9030,6 +9147,7 @@ class GatewayRunner:
             "platform": source.platform.value if source.platform else "",
             "user_id": source.user_id,
             "session_key": session_key,
+            "session_id": old_entry.session_id if old_entry else None,
         })
 
         # Emit session:reset hook

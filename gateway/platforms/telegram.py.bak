@@ -1750,32 +1750,7 @@ class TelegramAdapter(BasePlatformAdapter):
                                 )
                             else:
                                 raise
-                        # Check if Telegram returned _DroppedMessage as success result
-                        if msg is not None and "_DroppedMessage" in type(msg).__name__:
-                            if _send_attempt < 2:
-                                logger.warning(
-                                    "[%s] Telegram returned _DroppedMessage (attempt %d/3), retrying without reply",
-                                    self.name, _send_attempt + 1,
-                                )
-                                reply_to_id = None
-                                await asyncio.sleep(1)
-                                continue
-                            raise RuntimeError("_DroppedMessage after 3 retries")
                         break  # success
-                    except AttributeError as attr_err:
-                        # _DroppedMessage.copy() — Telegram dropped the message
-                        # internally (python-telegram _bot.py:833 Message.de_json
-                        # calls .copy() on _DroppedMessage which lacks it).
-                        if "_DroppedMessage" in str(attr_err) and "copy" in str(attr_err):
-                            if _send_attempt < 2:
-                                logger.warning(
-                                    "[%s] _DroppedMessage.copy() AttributeError (attempt %d/3), retrying without reply",
-                                    self.name, _send_attempt + 1,
-                                )
-                                reply_to_id = None
-                                await asyncio.sleep(1)
-                                continue
-                        raise
                     except _NetErr as send_err:
                         # BadRequest is a subclass of NetworkError in
                         # python-telegram-bot but represents permanent errors
@@ -2039,14 +2014,6 @@ class TelegramAdapter(BasePlatformAdapter):
                 "temporary failure",
                 "httpx",
             )
-            # _DroppedMessage.copy() — Telegram dropped the edit request
-            # internally. Mark retryable so streaming picks it up next cycle.
-            if "_DroppedMessage" in err_str and "copy" in err_str:
-                logger.warning(
-                    "[%s] _DroppedMessage.copy() on edit (msg %s), retryable",
-                    self.name, message_id,
-                )
-                return SendResult(success=False, error=str(e), retryable=True)
             _is_transient = any(m in err_str for m in _transient_markers)
             if _is_transient:
                 logger.warning(

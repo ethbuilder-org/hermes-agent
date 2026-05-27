@@ -261,7 +261,7 @@ def get_subprocess_home() -> str | None:
     return None
 
 
-VALID_REASONING_EFFORTS = ("minimal", "low", "medium", "high", "xhigh")
+VALID_REASONING_EFFORTS = ("minimal", "low", "medium", "high", "max", "xhigh")
 
 
 def parse_reasoning_effort(effort: str) -> dict | None:

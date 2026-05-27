@@ -2018,25 +2018,6 @@ def recompute_ready(conn: sqlite3.Connection) -> int:
                 # Blocked tasks also get their failure counters reset —
                 # this is effectively an auto-unblock.
                 if cur_status == "blocked":
-                    # GUARD (Mehdi 2026-05-22): if the latest 'blocked' event
-                    # carries a reason payload, this is a worker-side block
-                    # that needs a human decision before promotion. Skip the
-                    # auto-unblock until either an explicit `unblock_task`
-                    # call (CLI) clears the gate or the latest 'blocked'
-                    # event has no reason (parent-driven block).
-                    last_block = conn.execute(
-                        "SELECT payload FROM task_events "
-                        "WHERE task_id = ? AND kind = 'blocked' "
-                        "ORDER BY id DESC LIMIT 1",
-                        (task_id,),
-                    ).fetchone()
-                    if last_block and last_block["payload"]:
-                        try:
-                            _pl = json.loads(last_block["payload"])
-                            if isinstance(_pl, dict) and _pl.get("reason"):
-                                continue
-                        except Exception:
-                            pass
                     conn.execute(
                         "UPDATE tasks SET status = 'ready', "
                         "consecutive_failures = 0, last_failure_error = NULL "

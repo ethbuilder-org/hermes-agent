@@ -3803,19 +3803,55 @@ class AIAgent:
 
         New DELEGATE_TASK_SCHEMA fields only need to be added here to reach all
         invocation paths (concurrent, sequential, inline).
+
+        Starts a background progress-ping thread so users see 
+        "⏳ Sub-agent still working…" updates during long delegate_task runs.
         """
+        import threading as _threading
         from tools.delegate_tool import delegate_task as _delegate_task
-        return _delegate_task(
-            goal=function_args.get("goal"),
-            context=function_args.get("context"),
-            toolsets=function_args.get("toolsets"),
-            tasks=function_args.get("tasks"),
-            max_iterations=function_args.get("max_iterations"),
-            acp_command=function_args.get("acp_command"),
-            acp_args=function_args.get("acp_args"),
-            role=function_args.get("role"),
-            parent_agent=self,
-        )
+        
+        # ── Progress ping thread for long-running delegates (>60s) ──
+        start_time = time.monotonic()
+        delegate_done = _threading.Event()
+        _ping_interval = 60.0
+        
+        def _send_progress_ping() -> None:
+            """Periodic ping: notifies user of progress during long delegate_task runs."""
+            while not delegate_done.wait(_ping_interval):
+                elapsed = int(time.monotonic() - start_time)
+                try:
+                    self._touch_activity(f"delegate_task: sub-agent working ({elapsed}s)")
+                except Exception:
+                    pass
+                # Relay through tool_progress_callback if wired (gateway uses this)
+                try:
+                    cb = getattr(self, "tool_progress_callback", None)
+                    if cb is not None:
+                        cb(
+                            "delegate.progress",
+                            tool_name="delegate_task",
+                            preview=f"⏳ Sub-agent still working… {elapsed}s elapsed",
+                        )
+                except Exception:
+                    pass
+        
+        _ping_thread = _threading.Thread(target=_send_progress_ping, daemon=True)
+        _ping_thread.start()
+        
+        try:
+            return _delegate_task(
+                goal=function_args.get("goal"),
+                context=function_args.get("context"),
+                toolsets=function_args.get("toolsets"),
+                tasks=function_args.get("tasks"),
+                max_iterations=function_args.get("max_iterations"),
+                acp_command=function_args.get("acp_command"),
+                acp_args=function_args.get("acp_args"),
+                role=function_args.get("role"),
+                parent_agent=self,
+            )
+        finally:
+            delegate_done.set()  # Stop the ping thread
 
     def _invoke_tool(self, function_name: str, function_args: dict, effective_task_id: str,
                      tool_call_id: Optional[str] = None, messages: list = None,

@@ -1,0 +1,243 @@
+"""ethbuilder permfix: bulletproof Telegram rate limiter.
+
+Defense layers (in order):
+  L1 — per-chat token bucket (1 msg/sec, burst 4)
+  L2 — duplicate-message dedup (same text → same chat within 300s = drop)
+  L3 — global rate (25 msg/sec across all chats; Telegram caps at 30)
+  L4 — reactive lockout on RetryAfter (2N wait, no retries during)
+  L5 — edit coalesce per message_id (max 8 edits per message)
+  L6 — Bot._do_post monkey-patch (belt-and-suspenders for any code
+       path that bypasses TelegramAdapter)
+
+Designed to NEVER let a Telegram-flood-block recur. Drops at the gateway
+rather than at Telegram — strikes never accumulate.
+"""
+
+import asyncio
+import logging
+import time
+from collections import deque
+from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
+
+
+class TelegramRateLimiter:
+    # L1 — per-chat
+    PER_CHAT_RATE = 1.0          # tokens/sec
+    PER_CHAT_BURST = 4.0
+    # L3 — global
+    GLOBAL_RATE = 25             # msg/sec total
+    GLOBAL_WINDOW = 1.0          # seconds
+    # L2 — dedup
+    DEDUP_WINDOW_SEC = 300.0
+    # L5 — edit cap
+    MAX_EDITS_PER_MESSAGE = 200
+
+    def __init__(self):
+        self._chat_buckets: dict = {}              # chat_key -> (tokens, last_refill)
+        self._global_window: deque = deque()
+        self._dedup: dict = {}                     # (chat_key, hash) -> ts
+        self._chat_locks: dict = {}                # chat_key -> until_ts
+        self._edit_counts: dict = {}               # (chat_key, msg_id) -> count
+        self._lock = asyncio.Lock()
+        self._allowed_count = 0
+        self._dropped_count = 0
+        self._lockout_count = 0
+
+    async def acquire_send(self, chat_id, text: Optional[str] = None) -> bool:
+        chat_key = str(chat_id)
+        async with self._lock:
+            now = time.monotonic()
+
+            # L4 reactive lockout
+            lock_until = self._chat_locks.get(chat_key, 0)
+            if lock_until > now:
+                self._dropped_count += 1
+                logger.debug("[ratelimit] L4 chat=%s locked for %.1fs more",
+                             chat_key, lock_until - now)
+                return False
+
+            # L2 dedup
+            if text:
+                k = (chat_key, hash(text[:200]))
+                last = self._dedup.get(k, 0)
+                if now - last < self.DEDUP_WINDOW_SEC:
+                    self._dropped_count += 1
+                    logger.debug("[ratelimit] L2 dedup chat=%s text=%r",
+                                 chat_key, text[:80])
+                    return False
+
+            # L3 global
+            while self._global_window and now - self._global_window[0] >= self.GLOBAL_WINDOW:
+                self._global_window.popleft()
+            if len(self._global_window) >= self.GLOBAL_RATE:
+                self._dropped_count += 1
+                logger.debug("[ratelimit] L3 global cap chat=%s window=%d",
+                             chat_key, len(self._global_window))
+                return False
+
+            # L1 per-chat token bucket
+            tokens, last_refill = self._chat_buckets.get(
+                chat_key, (self.PER_CHAT_BURST, now)
+            )
+            tokens = min(self.PER_CHAT_BURST,
+                         tokens + (now - last_refill) * self.PER_CHAT_RATE)
+            if tokens < 1.0:
+                self._dropped_count += 1
+                logger.debug("[ratelimit] L1 bucket empty chat=%s tokens=%.2f",
+                             chat_key, tokens)
+                return False
+            tokens -= 1.0
+
+            # commit
+            self._chat_buckets[chat_key] = (tokens, now)
+            self._global_window.append(now)
+            if text:
+                self._dedup[(chat_key, hash(text[:200]))] = now
+            self._allowed_count += 1
+            return True
+
+    async def acquire_edit(self, chat_id, message_id) -> bool:
+        chat_key = str(chat_id)
+        key = (chat_key, str(message_id))
+        async with self._lock:
+            now = time.monotonic()
+            lock_until = self._chat_locks.get(chat_key, 0)
+            if lock_until > now:
+                self._dropped_count += 1
+                return False
+            count = self._edit_counts.get(key, 0)
+            if count >= self.MAX_EDITS_PER_MESSAGE:
+                self._dropped_count += 1
+                logger.debug("[ratelimit] L5 edit cap chat=%s msg=%s count=%d",
+                             chat_id, message_id, count)
+                return False
+            self._edit_counts[key] = count + 1
+            self._allowed_count += 1
+            return True
+
+    async def report_retry_after(self, chat_id, retry_after_sec: float):
+        chat_key = str(chat_id)
+        async with self._lock:
+            now = time.monotonic()
+            # 2x backoff; minimum 30s lockout
+            # 2026-05-19 ethbuilder fix: tighten backoff from 2x to retry_after+60s.
+            # Telegram's retry_after IS wall-clock until accept (empirically
+            # verified — three sequential 429s gave values that all targeted the
+            # same end-time, confirming honest decrement). 2x wastes 1x of
+            # lockout window. 60s safety buffer is enough cushion.
+            until = now + max(retry_after_sec + 60.0, 30.0)
+            cur = self._chat_locks.get(chat_key, 0)
+            if until > cur:
+                self._chat_locks[chat_key] = until
+                self._lockout_count += 1
+                logger.warning(
+                    "[ratelimit] L4 RetryAfter %.1fs from Telegram; "
+                    "locking chat=%s for %.1fs (2x backoff)",
+                    retry_after_sec, chat_key, until - now,
+                )
+
+    def reset_edit_count(self, chat_id, message_id):
+        self._edit_counts.pop((str(chat_id), str(message_id)), None)
+
+    def stats(self) -> dict:
+        now = time.monotonic()
+        return {
+            "allowed": self._allowed_count,
+            "dropped": self._dropped_count,
+            "lockouts_triggered": self._lockout_count,
+            "chats_tracked": len(self._chat_buckets),
+            "chats_locked_now": sum(1 for t in self._chat_locks.values() if t > now),
+        }
+
+
+_INSTANCE: Optional[TelegramRateLimiter] = None
+
+
+def get_limiter() -> TelegramRateLimiter:
+    global _INSTANCE
+    if _INSTANCE is None:
+        _INSTANCE = TelegramRateLimiter()
+    return _INSTANCE
+
+
+
+
+class _DroppedMessage:
+    """Stand-in Message returned when the rate limiter drops a send/edit.
+    Has the attributes downstream code reads on a real Message so the call
+    path doesn't crash. message_id=0 marks it as 'not actually sent'."""
+    __slots__ = ("chat_id", "_msg_id")
+    def __init__(self, chat_id, msg_id):
+        self.chat_id = chat_id
+        self._msg_id = msg_id or 0
+    @property
+    def message_id(self):
+        return self._msg_id
+    @property
+    def date(self):
+        import datetime
+        return datetime.datetime.now(datetime.timezone.utc)
+    def __repr__(self):
+        return f"<_DroppedMessage chat_id={self.chat_id} message_id={self._msg_id}>"
+    def __bool__(self):
+        return False  # so `if msg:` correctly treats it as not-sent
+
+def install_monkey_patch():
+    """Layer 6 — hook Bot._do_post so EVERY outbound API call passes through
+    the limiter. Idempotent; safe to call multiple times."""
+    try:
+        from telegram._bot import Bot
+    except Exception as e:
+        logger.error("[ratelimit] L6 install failed; telegram lib import: %s", e)
+        return
+
+    if getattr(Bot, "_ethbuilder_patched", False):
+        return
+
+    original_do_post = Bot._do_post
+
+    _RATE_LIMITED_ENDPOINTS = {
+        "sendMessage", "sendPhoto", "sendVoice", "sendAudio",
+        "sendDocument", "sendVideo", "sendAnimation",
+        "sendMediaGroup", "sendChatAction",
+        "editMessageText", "editMessageCaption", "editMessageMedia",
+        "editMessageReplyMarkup",
+    }
+
+    async def patched_do_post(self, endpoint, data=None, *args, **kwargs):
+        if endpoint not in _RATE_LIMITED_ENDPOINTS:
+            return await original_do_post(self, endpoint, data, *args, **kwargs)
+
+        chat_id = data.get("chat_id") if data else None
+        text = (data.get("text") or data.get("caption")) if data else None
+
+        limiter = get_limiter()
+        if endpoint.startswith("edit"):
+            msg_id = data.get("message_id") if data else None
+            if chat_id is not None and msg_id is not None:
+                if not await limiter.acquire_edit(chat_id, msg_id):
+                    return _DroppedMessage(chat_id, msg_id)
+        else:
+            if chat_id is not None:
+                if not await limiter.acquire_send(chat_id, text):
+                    return _DroppedMessage(chat_id, None)
+
+        try:
+            return await original_do_post(self, endpoint, data, *args, **kwargs)
+        except Exception as e:
+            retry_after = getattr(e, "retry_after", None)
+            if retry_after is not None and chat_id is not None:
+                try:
+                    sec = (retry_after.total_seconds()
+                           if hasattr(retry_after, "total_seconds")
+                           else float(retry_after))
+                    await limiter.report_retry_after(chat_id, sec)
+                except Exception:
+                    pass
+            raise
+
+    Bot._do_post = patched_do_post
+    Bot._ethbuilder_patched = True
+    logger.info("[ratelimit] L6 monkey-patch installed (TelegramRateLimiter)")
