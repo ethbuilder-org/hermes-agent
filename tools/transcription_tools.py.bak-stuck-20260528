@@ -104,52 +104,6 @@ GROQ_MODELS = {"whisper-large-v3", "whisper-large-v3-turbo", "distil-whisper-lar
 _local_model: Optional[object] = None
 _local_model_name: Optional[str] = None
 
-# Patches (Mehdi 2026-05-28) — fixes the "stuck on voice" Telegram pattern.
-# 1) HERMES_STT_LOCAL_MODEL beats the config.yaml value (config is chattr +i)
-# 2) _TRANSCRIBE_LOCK serializes concurrent transcribe() calls. Under CPU
-#    contention, running 2 in parallel is ~3x slower than running them
-#    one-after-the-other; the lock removes the contention.
-# 3) _TRANSCRIPT_CACHE returns the existing transcript when the same audio
-#    arrives twice (forwarded messages, retries). Keyed by sha256 of the
-#    audio bytes, capped at 32 entries (~30KB memory).
-import hashlib as _hashlib
-import threading as _threading
-from collections import OrderedDict as _OrderedDict
-
-_TRANSCRIBE_LOCK = _threading.Lock()
-_TRANSCRIPT_CACHE: "_OrderedDict[str, Dict[str, Any]]" = _OrderedDict()
-_TRANSCRIPT_CACHE_MAX = 32
-
-
-def _audio_sha256(file_path: str) -> Optional[str]:
-    try:
-        h = _hashlib.sha256()
-        with open(file_path, "rb") as _fh:
-            for chunk in iter(lambda: _fh.read(65536), b""):
-                h.update(chunk)
-        return h.hexdigest()
-    except Exception:
-        return None
-
-
-def _cache_get(key: str) -> Optional[Dict[str, Any]]:
-    if not key:
-        return None
-    if key in _TRANSCRIPT_CACHE:
-        # Touch (LRU)
-        _TRANSCRIPT_CACHE.move_to_end(key)
-        return dict(_TRANSCRIPT_CACHE[key])
-    return None
-
-
-def _cache_put(key: str, value: Dict[str, Any]) -> None:
-    if not key or not value:
-        return
-    _TRANSCRIPT_CACHE[key] = dict(value)
-    _TRANSCRIPT_CACHE.move_to_end(key)
-    while len(_TRANSCRIPT_CACHE) > _TRANSCRIPT_CACHE_MAX:
-        _TRANSCRIPT_CACHE.popitem(last=False)
-
 # ---------------------------------------------------------------------------
 # Config helpers
 # ---------------------------------------------------------------------------
@@ -445,38 +399,12 @@ def _load_local_whisper_model(model_name: str):
 
 
 def _transcribe_local(file_path: str, model_name: str) -> Dict[str, Any]:
-    """Transcribe using faster-whisper (local, free).
-
-    Patched 2026-05-28 (Mehdi): hash-dedupe + mutex + env-override.
-    """
+    """Transcribe using faster-whisper (local, free)."""
     global _local_model, _local_model_name
 
     if not _HAS_FASTER_WHISPER:
         return {"success": False, "transcript": "", "error": "faster-whisper not installed"}
 
-    # 1. env-var override beats config.yaml
-    _env_override = os.getenv("HERMES_STT_LOCAL_MODEL", "").strip()
-    if _env_override:
-        model_name = _env_override
-
-    # 2. cache lookup — same audio bytes → return instantly
-    _cache_key = _audio_sha256(file_path)
-    _cached = _cache_get(_cache_key) if _cache_key else None
-    if _cached is not None:
-        logger.info(
-            "Local whisper: cache hit for %s (model=%s, %d-char transcript)",
-            Path(file_path).name, model_name, len(_cached.get("transcript", "")),
-        )
-        return _cached
-
-    # 3. mutex — serialize concurrent calls. Running two transcribes in
-    #    parallel on the same CPU is slower than running them one after
-    #    the other; the lock eliminates the contention.
-    _TRANSCRIBE_LOCK.acquire()
-    try:
-        pass  # legacy body follows
-    finally:
-        pass  # no-op; the real release is in a finally just below
     try:
         # Lazy-load the model (downloads on first use, ~150 MB for 'base')
         if _local_model is None or _local_model_name != model_name:
@@ -523,21 +451,10 @@ def _transcribe_local(file_path: str, model_name: str) -> Dict[str, Any]:
             Path(file_path).name, model_name, info.language, info.duration,
         )
 
-        _result = {"success": True, "transcript": transcript, "provider": "local"}
-        if _cache_key:
-            _cache_put(_cache_key, _result)
-        try:
-            _TRANSCRIBE_LOCK.release()
-        except RuntimeError:
-            pass
-        return _result
+        return {"success": True, "transcript": transcript, "provider": "local"}
 
     except Exception as e:
         logger.error("Local transcription failed: %s", e, exc_info=True)
-        try:
-            _TRANSCRIBE_LOCK.release()
-        except RuntimeError:
-            pass
         return {"success": False, "transcript": "", "error": f"Local transcription failed: {e}"}
 
 
@@ -632,10 +549,6 @@ def _transcribe_local_command(file_path: str, model_name: str) -> Dict[str, Any]
         return {"success": False, "transcript": "", "error": f"Local STT failed: {details}"}
     except Exception as e:
         logger.error("Unexpected error during local command transcription: %s", e, exc_info=True)
-        try:
-            _TRANSCRIBE_LOCK.release()
-        except RuntimeError:
-            pass
         return {"success": False, "transcript": "", "error": f"Local transcription failed: {e}"}
 
 # ---------------------------------------------------------------------------

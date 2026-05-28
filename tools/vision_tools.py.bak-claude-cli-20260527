@@ -630,73 +630,6 @@ async def _vision_analyze_native(
                 pass
 
 
-_USE_CLAUDE_CLI = (os.environ.get("HERMES_VISION_VIA_CLAUDE_CLI", "").lower()
-                   in {"1", "true", "yes", "on"})
-_CLAUDE_CLI_MODEL = os.environ.get("HERMES_VISION_CLAUDE_MODEL", "claude-opus-4-7")
-
-
-async def _vision_via_claude_cli(image_url: str, user_prompt: str) -> str:
-    """Route vision through the local `claude` CLI (Claude Code, Max sub OAuth).
-
-    Patched 2026-05-22 (Mehdi): the configured ``auxiliary.vision`` provider on
-    this box is anthropic with an empty API key — Mehdi authenticates Claude
-    through his Max subscription on the VPS, not via API key. Calling ``claude
-    -p`` reuses that OAuth automatically and costs nothing extra (subscription
-    flat-fee). Only kicks in when HERMES_VISION_VIA_CLAUDE_CLI=1 is set.
-    """
-    import asyncio
-    import json as _json
-    # Resolve to a local file (download remote URLs first).
-    resolved = image_url
-    if resolved.startswith("file://"):
-        resolved = resolved[len("file://"):]
-    local_path = Path(os.path.expanduser(resolved))
-    cleanup_path = None
-    if not local_path.is_file():
-        if not _validate_image_url(image_url):
-            return _json.dumps({"success": False,
-                                "analysis": f"Invalid image source: {image_url}"})
-        blocked = check_website_access(image_url)
-        if blocked:
-            return _json.dumps({"success": False, "analysis": blocked["message"]})
-        temp_dir = get_hermes_dir("cache/vision", "temp_vision_images")
-        local_path = temp_dir / f"temp_image_{uuid.uuid4()}.jpg"
-        await _download_image(image_url, local_path)
-        cleanup_path = local_path
-
-    prompt = f"Read the image at {local_path}. {user_prompt}"
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "claude", "-p", prompt, "--model", _CLAUDE_CLI_MODEL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=120)
-        except asyncio.TimeoutError:
-            proc.kill()
-            return _json.dumps({"success": False,
-                                "analysis": "claude CLI vision call timed out after 120s"})
-        text = stdout_b.decode("utf-8", "replace").strip()
-        err = stderr_b.decode("utf-8", "replace").strip()
-        if proc.returncode != 0 and not text:
-            return _json.dumps({"success": False,
-                                "analysis": f"claude CLI exited {proc.returncode}: {err[:240]}"})
-        if not text:
-            return _json.dumps({"success": False,
-                                "analysis": "claude CLI returned empty output"})
-        return _json.dumps({"success": True, "analysis": text})
-    except FileNotFoundError:
-        return _json.dumps({"success": False,
-                            "analysis": "claude CLI not found on PATH"})
-    finally:
-        if cleanup_path is not None and cleanup_path.exists():
-            try:
-                cleanup_path.unlink()
-            except Exception:
-                pass
-
-
 async def vision_analyze_tool(
     image_url: str,
     user_prompt: str,
@@ -734,16 +667,6 @@ async def vision_analyze_tool(
         - For local file paths, the file is used directly and NOT deleted
         - Supports common image formats (JPEG, PNG, GIF, WebP, etc.)
     """
-    # Patched 2026-05-22: if HERMES_VISION_VIA_CLAUDE_CLI=1, short-circuit
-    # through the local `claude` CLI which uses Mehdi's Max-sub OAuth.
-    # See _vision_via_claude_cli above. The legacy HTTP path is kept as
-    # the fallback so flipping the env var off restores upstream behavior.
-    if _USE_CLAUDE_CLI:
-        try:
-            return await _vision_via_claude_cli(image_url, user_prompt)
-        except Exception as _e:
-            logger.warning("claude-cli vision route failed, falling back to HTTP: %s", _e)
-
     if not isinstance(user_prompt, str):
         user_prompt = str(user_prompt) if user_prompt is not None else ""
     debug_call_data = {
@@ -1248,16 +1171,6 @@ async def video_analyze_tool(
     model: str = None,
 ) -> str:
     """Analyze a video via multimodal LLM. Returns JSON {success, analysis}."""
-    # Patched 2026-05-22: if HERMES_VISION_VIA_CLAUDE_CLI=1, short-circuit
-    # through the local `claude` CLI which uses Mehdi's Max-sub OAuth.
-    # See _vision_via_claude_cli above. The legacy HTTP path is kept as
-    # the fallback so flipping the env var off restores upstream behavior.
-    if _USE_CLAUDE_CLI:
-        try:
-            return await _vision_via_claude_cli(image_url, user_prompt)
-        except Exception as _e:
-            logger.warning("claude-cli vision route failed, falling back to HTTP: %s", _e)
-
     if not isinstance(user_prompt, str):
         user_prompt = str(user_prompt) if user_prompt is not None else ""
     debug_call_data = {

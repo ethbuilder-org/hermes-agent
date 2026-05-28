@@ -10026,65 +10026,8 @@ def _plugin_cli_discovery_needed() -> bool:
     return True
 
 
-def _kanban_worker_safety_net() -> None:
-    """Atexit hook: if this process was a kanban worker (HERMES_KANBAN_TASK
-    set) and exits while the task is still status='running', block the task
-    so it surfaces in the dispatcher instead of silently looking alive.
-
-    Added 2026-05-22 (Mehdi): the dispatcher already reclaims stale-heartbeat
-    workers, but that takes up to an hour to trigger. This net is fast: as
-    soon as Python exits (clean or uncaught exception), the task gets a
-    proper 'worker exited' block instead of waiting for the staleness timer.
-    SIGKILL bypasses atexit — that path is still covered by the dispatcher's
-    PID-alive check + auto_heartbeat_running.
-    """
-    import os, sys, traceback, io
-    task_id = os.environ.get("HERMES_KANBAN_TASK", "").strip()
-    if not task_id:
-        return
-    try:
-        from hermes_cli import kanban_db as _kb
-    except Exception:
-        return
-    try:
-        conn = _kb.connect()
-    except Exception:
-        return
-    try:
-        cur = conn.execute(
-            "SELECT status, worker_pid FROM tasks WHERE id = ?", (task_id,)
-        ).fetchone()
-        if not cur or cur["status"] != "running":
-            return
-        # Only act if we're the worker that owns this row.
-        if cur["worker_pid"] and int(cur["worker_pid"]) != os.getpid():
-            return
-        # Capture the current exception if we're being unwound by one.
-        reason_buf = io.StringIO()
-        reason_buf.write("worker exited without completing the task")
-        exc = sys.exc_info()
-        if exc and exc[0] is not None:
-            reason_buf.write(" (uncaught ")
-            reason_buf.write(exc[0].__name__)
-            reason_buf.write("):\n")
-            traceback.print_exception(*exc, limit=8, file=reason_buf)
-        reason = "[atexit safety-net] " + reason_buf.getvalue()[:1400]
-        try:
-            _kb.block_task(conn, task_id, reason=reason)
-        except Exception:
-            pass
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-
 def main():
     """Main entry point for hermes CLI."""
-    # Atexit safety net for kanban workers — see _kanban_worker_safety_net.
-    import atexit as _atexit
-    _atexit.register(_kanban_worker_safety_net)
     # Force UTF-8 stdio on Windows before anything prints.  No-op elsewhere.
     try:
         from hermes_cli.stdio import configure_windows_stdio

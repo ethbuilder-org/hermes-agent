@@ -5139,20 +5139,6 @@ class GatewayRunner:
                 # re-ran the migration on a second connection, racing
                 # the first. See the matching comment in
                 # `_kanban_notifier_watcher` and issue #21378.
-                # Passive heartbeat for running workers BEFORE dispatch.
-                # Added 2026-05-22 (Mehdi): writes last_heartbeat_at for any
-                # host-local running task whose PID is alive. Removes the
-                # "I die if I forget to heartbeat" failure mode — the worker
-                # no longer has to remember anything.
-                try:
-                    hb_n = _kb.auto_heartbeat_running(conn)
-                    if hb_n:
-                        logger.debug(
-                            "kanban dispatcher: auto-heartbeat refreshed %d worker(s)",
-                            hb_n,
-                        )
-                except Exception:
-                    logger.exception("kanban dispatcher: auto_heartbeat_running failed")
                 return _kb.dispatch_once(
                     conn,
                     board=slug,

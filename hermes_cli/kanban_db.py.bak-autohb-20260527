@@ -3977,60 +3977,6 @@ def enforce_max_runtime(
 # to match the original spec (">4h started + no commits in 1h").
 _STALE_HEARTBEAT_GAP_SECONDS = 3600
 
-def auto_heartbeat_running(conn: sqlite3.Connection) -> int:
-    """Gateway-side passive heartbeat for running workers.
-
-    Added 2026-05-22 (Mehdi): the original design expected the worker LLM
-    to emit kanban_heartbeat tool calls periodically. In practice agents
-    forget, get into deep think loops, or run long subprocess calls and
-    skip the heartbeat — then ``detect_stale_running`` reclaims them as
-    dead even though the Python process is happily working.
-
-    This function is called from the dispatcher tick. For every task in
-    status='running' whose worker_pid is host-local AND still alive on
-    this host, write ``last_heartbeat_at = now``. The worker does not
-    have to know anything; if the process exists, we say it is alive.
-
-    Returns the count of heartbeats issued.
-    """
-    now = int(time.time())
-    host_prefix = f"{_claimer_id().split(':', 1)[0]}:"
-    rows = conn.execute(
-        "SELECT id, worker_pid, claim_lock, current_run_id "
-        "FROM tasks WHERE status='running' AND worker_pid IS NOT NULL"
-    ).fetchall()
-    if not rows:
-        return 0
-    n = 0
-    with write_txn(conn):
-        for row in rows:
-            pid = row["worker_pid"]
-            lock = row["claim_lock"] or ""
-            if not pid or int(pid) <= 0:
-                continue
-            if not str(lock).startswith(host_prefix):
-                continue
-            try:
-                import os as _os
-                _os.kill(int(pid), 0)
-            except (ProcessLookupError, PermissionError, OSError):
-                continue
-            tid = row["id"]
-            conn.execute(
-                "UPDATE tasks SET last_heartbeat_at = ? WHERE id = ?",
-                (now, tid),
-            )
-            run_id = row["current_run_id"]
-            if run_id is not None:
-                conn.execute(
-                    "UPDATE task_runs SET last_heartbeat_at = ? WHERE id = ?",
-                    (now, int(run_id)),
-                )
-            n += 1
-    return n
-
-
-
 
 def detect_stale_running(
     conn: sqlite3.Connection,

@@ -57,54 +57,6 @@ def _ra():
     return run_agent
 
 
-def _tdai_brain_block() -> str:
-    """Return a compact cross-system memory block for system-prompt injection.
-
-    Combines TencentDB L3 persona.md (stable identity) + gbrain
-    important_entities.json (top-7 hot projects). Added 2026-05-22 (Mehdi):
-    fixes the "memory truncated at 30K tokens" complaint by pinning the
-    highest-signal facts into every turn — the cliente persona is ~3.6KB
-    and the top-7 list is ~300B, total <4KB, well under any context cap.
-
-    Read once at session boot; cached on the agent. Falls back to empty
-    string on any error so agent init never breaks if these files don't
-    exist yet (e.g. TencentDB still warming up, gbrain not run today).
-    """
-    import json as _json
-    import os as _os
-    parts = []
-    persona_path = "/root/.memory-tencentdb/memory-tdai/persona.md"
-    try:
-        if _os.path.isfile(persona_path):
-            with open(persona_path, "r", encoding="utf-8", errors="ignore") as _f:
-                _persona = _f.read().strip()
-            if _persona:
-                # Cap at ~4KB so this never explodes if persona drifts large.
-                if len(_persona) > 4000:
-                    _persona = _persona[:4000] + "\n…[truncated]"
-                parts.append("## Long-term user persona (TencentDB L3)\n" + _persona)
-    except Exception:
-        pass
-    important_path = "/root/.hermes/gbrain/important_entities.json"
-    try:
-        if _os.path.isfile(important_path):
-            with open(important_path, "r", encoding="utf-8") as _f:
-                _imp = _json.load(_f)
-            ents = _imp.get("important_entities") or []
-            if ents:
-                lines = ["## Currently hot projects (gbrain top-7, " +
-                         _imp.get("as_of", "") + ")"]
-                for it in ents[:7]:
-                    name = it.get("name", "?")
-                    cls = it.get("class", "")
-                    cnt = it.get("hot_count", 0)
-                    lines.append("- " + name + " (" + cls + ", " + str(cnt) + " refs/7d)")
-                parts.append("\n".join(lines))
-    except Exception:
-        pass
-    return "\n\n".join(parts).strip()
-
-
 def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) -> Dict[str, str]:
     """Assemble the system prompt as three ordered parts.
 
@@ -307,14 +259,6 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
                 volatile_parts.append(_ext_mem_block)
         except Exception:
             pass
-
-    # TDAI/gbrain pinned memory — see _tdai_brain_block above.
-    try:
-        _brain = _tdai_brain_block()
-        if _brain:
-            volatile_parts.append(_brain)
-    except Exception:
-        pass
 
     from hermes_time import now as _hermes_now
     now = _hermes_now()
